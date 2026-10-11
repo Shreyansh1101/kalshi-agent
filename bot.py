@@ -33,6 +33,7 @@ MAX_STAKE_C = float(os.environ.get("MAX_STAKE_PER_TRADE", "1000"))      # $10.00
 MAX_SIGNALS_PER_DAY = int(os.environ.get("MAX_SIGNALS_PER_DAY", "0"))   # 0 = no cap
 DAILY_STOP_LOSS_C = float(os.environ.get("DAILY_STOP_LOSS_CENTS", "2000"))  # $20.00
 TAKE_PROFIT_PCT = float(os.environ.get("TAKE_PROFIT_PCT", "0.30"))  # 30% of stake
+STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", "0.30"))      # 30% of stake
 MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
 STALE_TOLERANCE_C = 2.0                   # live: skip if price moved >2c
@@ -191,14 +192,15 @@ def settle_bot(ledger, errors):
     return settled
 
 
-def check_take_profit(ledger, errors):
-    """Early exit: close any open position whose net-at-bid profit reaches
-    TAKE_PROFIT_PCT of its stake (net of entry fee, exit fee and spread — the
-    bid is what a real sell would actually get). Runs every scan, even when
-    the daily stop has halted new entries: exits only reduce risk. In dry-run
-    the exit is simulated at the bid; live it places a real sell order.
-    Returns the list of exited entries."""
-    if TAKE_PROFIT_PCT <= 0:
+def check_exits(ledger, errors):
+    """Early exits: close any open position whose net-at-bid P&L reaches
+    +TAKE_PROFIT_PCT of its stake (take-profit) or -STOP_LOSS_PCT (stop-loss).
+    Net means after entry fee, exit fee and spread — the bid is what a real
+    sell would actually get. Runs every scan, even when the daily stop has
+    halted new entries: exits only reduce risk. In dry-run the exit is
+    simulated at the bid; live it places a real sell order. Returns the
+    list of exited entries."""
+    if TAKE_PROFIT_PCT <= 0 and STOP_LOSS_PCT <= 0:
         return []
     exited = []
     t = eng.now_et().isoformat()
@@ -207,7 +209,7 @@ def check_take_profit(ledger, errors):
             continue
         m = eng.kalshi_market(e["ticker"])  # scan cache: fetched moments ago by settle_bot
         if not m:
-            errors.append(f"{e['ticker']}: market fetch failed during take-profit check")
+            errors.append(f"{e['ticker']}: market fetch failed during exit check")
             continue
         if m.get("status") == "settled":
             continue  # settle_bot handles these
@@ -215,11 +217,16 @@ def check_take_profit(ledger, errors):
         if not q:
             continue
         bid = q["yes_bid"] if e["side"] == "YES" else q["no_bid"]
+        stake_c = e.get("stake_c", 0)
         exit_value_c = round(e["contracts"] * bid, 2)
         exit_fee_c = eng.taker_fee_c(e["contracts"], bid / 100.0)
-        net_c = exit_value_c - e.get("stake_c", 0) - e.get("fee_c", 0) - exit_fee_c
-        threshold_c = TAKE_PROFIT_PCT * e.get("stake_c", 0)
-        if net_c < threshold_c:
+        net_c = exit_value_c - stake_c - e.get("fee_c", 0) - exit_fee_c
+        reason = None
+        if TAKE_PROFIT_PCT > 0 and net_c >= TAKE_PROFIT_PCT * stake_c:
+            reason = "take-profit"
+        elif STOP_LOSS_PCT > 0 and net_c <= -STOP_LOSS_PCT * stake_c:
+            reason = "stop-loss"
+        if not reason:
             continue
         # --- exit it ---
         e["status"] = "exited"
@@ -228,13 +235,14 @@ def check_take_profit(ledger, errors):
         e["exit_value_c"] = exit_value_c
         e["exit_fee_c"] = exit_fee_c
         e["pnl_c"] = round(net_c, 2)
-        e["exit_reason"] = "take-profit"
+        e["exit_reason"] = reason
+        tag = "take-profit" if reason == "take-profit" else "STOP-LOSS"
         if DRY_RUN:
-            msg = (f"DRY-RUN take-profit exit: {e['side']} {e['contracts']}x {e['ticker']} "
-                   f"@ {bid:.0f}c, locked in {eng.fmt_money(net_c)} (net of fees)")
+            msg = (f"DRY-RUN {tag} exit: {e['side']} {e['contracts']}x {e['ticker']} "
+                   f"@ {bid:.0f}c, {eng.fmt_money(net_c)} (net of fees)")
             log(msg)
             if NOTIFY_DRY_RUN:
-                notify("Kalshi bot (dry-run take-profit)", msg)
+                notify(f"Kalshi bot (dry-run {tag})", msg)
             exited.append(e)
             continue
         # LIVE: real money sell
@@ -252,10 +260,10 @@ def check_take_profit(ledger, errors):
             continue
         if order is not None:
             e["exit_order_id"] = getattr(order, "order_id", None)
-        msg = (f"LIVE take-profit SELL: {e['side']} {e['contracts']}x {e['ticker']} "
-               f"@ {bid:.0f}c, locked in {eng.fmt_money(net_c)} (net of fees)")
+        msg = (f"LIVE {tag} SELL: {e['side']} {e['contracts']}x {e['ticker']} "
+               f"@ {bid:.0f}c, {eng.fmt_money(net_c)} (net of fees)")
         log(msg)
-        notify("Kalshi bot: TAKE-PROFIT SELL (real money)", msg, priority="high")
+        notify(f"Kalshi bot: {tag} SELL (real money)", msg, priority="high")
         exited.append(e)
     return exited
 
@@ -356,8 +364,8 @@ def scan_once():
 
     errors = []
     settled = settle_bot(ledger, errors)
-    # Take-profit exits run before the halt math so freed risk counts this scan.
-    exited = check_take_profit(ledger, errors)
+    # Exits run before the halt math so freed risk counts this scan.
+    exited = check_exits(ledger, errors)
     pairs = evaluate_pairs(errors)
     if pairs is None:
         log("ERROR: watchlist.json missing/unreadable")
@@ -437,7 +445,7 @@ def main():
     cap = "uncapped" if MAX_SIGNALS_PER_DAY == 0 else MAX_SIGNALS_PER_DAY
     log(f"poll={POLL_SECONDS}s stake={MAX_STAKE_C / 100:.2f} max/day={cap} "
         f"stop={DAILY_STOP_LOSS_C / 100:.2f} take_profit={TAKE_PROFIT_PCT * 100:.0f}% "
-        f"min_div={MIN_DIVERGENCE_C:.0f}c window=9-21 ET")
+        f"stop_loss={STOP_LOSS_PCT * 100:.0f}% min_div={MIN_DIVERGENCE_C:.0f}c window=9-21 ET")
     if not DRY_RUN and (not os.environ.get("KALSHI_KEY_ID")
                         or not os.environ.get("KALSHI_KEY_PATH")):
         raise SystemExit("LIVE mode needs KALSHI_KEY_ID and KALSHI_KEY_PATH. Refusing to start.")

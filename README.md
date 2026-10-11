@@ -104,11 +104,13 @@ sudo ~/kalshi-bot/go-live.sh <paste-the-Key-ID>
 
 Back to dry-run any time: `sudo ~/kalshi-bot/go-dry-run.sh`
 
-Safety rails that stay on in live mode: $4 max per trade, max 3 orders/day,
-$20 daily stop-loss (then it stops for the day), one position per event,
-9 AM–9 PM ET window only, and every live order re-checks the quote first —
-if the price moved more than 2¢ from the signal, it skips. Live limit orders
-expire after 120 seconds so nothing rests stale.
+Safety rails that stay on in live mode: $10 max per trade, uncapped orders/day
+but max $20 at risk at any moment (the stop counts open positions, so it
+can't be outrun by simultaneous trades), one position per event, 9 AM–9 PM ET
+window only, and every live order re-checks the quote first — if the price
+moved more than 2¢ from the signal, it skips. After the $20 stop trips, the
+bot keeps sending signals info-only (no orders). Live limit orders expire
+after 120 seconds so nothing rests stale.
 
 Note: the key pair lives on the instance — if you ever delete and recreate
 it, repeat steps 1–2 (new key pair, new upload).
@@ -135,9 +137,9 @@ All via environment variables (in the service file or `systemctl edit`):
 |---|---|---|
 | `DRY_RUN` | `true` | `true` = log only; `false` = real orders |
 | `POLL_SECONDS` | `60` | seconds between scans |
-| `MAX_STAKE_PER_TRADE` | `400` | cents ($4.00) max per order |
-| `MAX_SIGNALS_PER_DAY` | `3` | max orders per day (ET) |
-| `DAILY_STOP_LOSS_CENTS` | `2000` | cents ($20) — halts new orders for the day |
+| `MAX_STAKE_PER_TRADE` | `1000` | cents ($10.00) max per order |
+| `MAX_SIGNALS_PER_DAY` | `0` | max orders per day (ET); `0` = uncapped |
+| `DAILY_STOP_LOSS_CENTS` | `2000` | cents ($20) — counts open exposure too, so max $20 is ever at risk; after halt, signals continue info-only |
 | `MIN_DIVERGENCE_CENTS` | `2` | min Kalshi-vs-reference gap to trade |
 | `KALSHI_KEY_ID` | — | from kalshi.com after uploading public key |
 | `KALSHI_KEY_PATH` | `~/.kalshi/kalshi-private.pem` | private key file (600) |

@@ -29,8 +29,8 @@ import signal_engine as eng       # noqa: E402  (vendored paper engine)
 # ---------------- configuration (env-overridable) ----------------
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() not in ("0", "false", "no")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
-MAX_STAKE_C = float(os.environ.get("MAX_STAKE_PER_TRADE", "400"))       # $4.00
-MAX_SIGNALS_PER_DAY = int(os.environ.get("MAX_SIGNALS_PER_DAY", "3"))
+MAX_STAKE_C = float(os.environ.get("MAX_STAKE_PER_TRADE", "1000"))      # $10.00
+MAX_SIGNALS_PER_DAY = int(os.environ.get("MAX_SIGNALS_PER_DAY", "0"))   # 0 = no cap
 DAILY_STOP_LOSS_C = float(os.environ.get("DAILY_STOP_LOSS_CENTS", "2000"))  # $20.00
 MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
@@ -259,7 +259,7 @@ def scan_once():
     state = eng.load_json(STATE, {})
     today = t.strftime("%Y-%m-%d")
     if state.get("date") != today:
-        state = {"date": today, "signal_ids": []}
+        state = {"date": today, "signal_ids": [], "info_ids": []}
 
     errors = []
     settled = settle_bot(ledger, errors)
@@ -269,12 +269,38 @@ def scan_once():
         return
 
     pnl = bot_daily_pnl(ledger, today)
-    halted = pnl <= -DAILY_STOP_LOSS_C
+    # Exposure-aware stop: halt when worst case (everything open goes to zero)
+    # would breach -$20. This keeps "stop-loss $20" true even with $10 trades
+    # and no daily cap — max $20 at risk at any moment, unlimited orders/day
+    # as positions settle.
+    open_marks = sum(e.get("last_mark_c", e.get("stake_c", 0))
+                     for e in ledger if e.get("status") in OPEN_STATUSES)
+    worst_case = pnl - open_marks
+    halted = worst_case <= -DAILY_STOP_LOSS_C
     if halted:
-        log(f"daily stop-loss hit (pnl {pnl / 100:+.2f}); no new orders today")
+        log(f"daily stop-loss hit (worst-case {worst_case / 100:+.2f}); info-only mode")
 
+    uncapped = MAX_SIGNALS_PER_DAY == 0
     placed = []
-    if not halted and len(state["signal_ids"]) < MAX_SIGNALS_PER_DAY:
+    if halted:
+        # Info-only: keep surfacing new signals, act on nothing.
+        held = {e.get("event_ticker") for e in ledger if e.get("status") in OPEN_STATUSES}
+        info_done = set(state.get("info_ids", []))
+        for p in pairs:
+            s = eng.decide_signal(p)
+            if not s:
+                continue
+            ev = p.get("event_ticker")
+            if ev in held or ev in info_done:
+                continue
+            msg = (f"INFO-ONLY (daily stop hit): {s['side']} {s['contracts']}x "
+                   f"{s['ticker']} @ {s['entry_price_c']:.0f}c "
+                   f"(div {s['divergence_c']:+.1f}c)")
+            log(msg)
+            notify("Kalshi bot (info-only)", msg)
+            info_done.add(ev)
+        state["info_ids"] = sorted(info_done)
+    elif uncapped or len(state["signal_ids"]) < MAX_SIGNALS_PER_DAY:
         # One position per event: both sides of one game are the same bet.
         held = {e.get("event_ticker") for e in ledger if e.get("status") in OPEN_STATUSES}
         today_ev = {x.get("event_ticker") for x in ledger if x.get("id") in state["signal_ids"]}
@@ -297,7 +323,7 @@ def scan_once():
                 ledger.append(entry)
                 state["signal_ids"].append(entry["id"])
                 placed.append(entry["id"])
-            if len(state["signal_ids"]) >= MAX_SIGNALS_PER_DAY:
+            if not uncapped and len(state["signal_ids"]) >= MAX_SIGNALS_PER_DAY:
                 break
 
     eng.save_json(LEDGER, ledger)
@@ -313,7 +339,8 @@ def main():
     mode = "DRY-RUN (no real orders)" if DRY_RUN else "*** LIVE — REAL MONEY ***"
     log("=" * 60)
     log(f"Kalshi bot starting \u2014 MODE: {mode}")
-    log(f"poll={POLL_SECONDS}s stake={MAX_STAKE_C / 100:.2f} max/day={MAX_SIGNALS_PER_DAY} "
+    cap = "uncapped" if MAX_SIGNALS_PER_DAY == 0 else MAX_SIGNALS_PER_DAY
+    log(f"poll={POLL_SECONDS}s stake={MAX_STAKE_C / 100:.2f} max/day={cap} "
         f"stop={DAILY_STOP_LOSS_C / 100:.2f} min_div={MIN_DIVERGENCE_C:.0f}c window=9-21 ET")
     if not DRY_RUN and (not os.environ.get("KALSHI_KEY_ID")
                         or not os.environ.get("KALSHI_KEY_PATH")):

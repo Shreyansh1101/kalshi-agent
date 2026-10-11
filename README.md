@@ -110,7 +110,9 @@ can't be outrun by simultaneous trades), one position per event, 9 AM–9 PM ET
 window only, and every live order re-checks the quote first — if the price
 moved more than 2¢ from the signal, it skips. After the $20 stop trips, the
 bot keeps sending signals info-only (no orders). Live limit orders expire
-after 120 seconds so nothing rests stale.
+after 120 seconds so nothing rests stale. Any open position whose net-at-bid
+profit reaches $2 (after both fees and the spread) is sold early to lock it
+in — this runs even after the stop trips, since exits only reduce risk.
 
 Note: the key pair lives on the instance — if you ever delete and recreate
 it, repeat steps 1–2 (new key pair, new upload).
@@ -140,6 +142,7 @@ All via environment variables (in the service file or `systemctl edit`):
 | `MAX_STAKE_PER_TRADE` | `1000` | cents ($10.00) max per order |
 | `MAX_SIGNALS_PER_DAY` | `0` | max orders per day (ET); `0` = uncapped |
 | `DAILY_STOP_LOSS_CENTS` | `2000` | cents ($20) — counts open exposure too, so max $20 is ever at risk; after halt, signals continue info-only |
+| `TAKE_PROFIT_CENTS` | `200` | cents ($2.00) — sell any open position early once its net-at-bid profit (after entry fee, exit fee and spread) reaches this; runs every scan, even when halted |
 | `MIN_DIVERGENCE_CENTS` | `2` | min Kalshi-vs-reference gap to trade |
 | `KALSHI_KEY_ID` | — | from kalshi.com after uploading public key |
 | `KALSHI_KEY_PATH` | `~/.kalshi/kalshi-private.pem` | private key file (600) |

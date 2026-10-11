@@ -62,7 +62,24 @@ You should see `MODE: DRY-RUN (no real orders)` and a `scan done:` line every
 cat ~/kalshi-bot/ledger.json   # dry-run entries accumulate here
 ```
 
-## 4. Going LIVE (real money) — only when YOU decide
+## 4. Phone notifications (ntfy.sh)
+
+The bot pushes to your phone on every signal (dry-run) and on every live
+order or order failure. One-time setup:
+
+1. Install the **ntfy** app (iOS App Store) and subscribe to this topic:
+   `kalshi-bot-07edfd35`
+2. On the instance, one command:
+   ```bash
+   sudo mkdir -p /etc/systemd/system/kalshi-bot.service.d && printf '[Service]\nEnvironment=NTFY_TOPIC=kalshi-bot-07edfd35\n' | sudo tee /etc/systemd/system/kalshi-bot.service.d/notify.conf && sudo systemctl daemon-reload && sudo systemctl restart kalshi-bot
+   ```
+3. You'll get a "Kalshi bot started" push within seconds — that confirms
+   notifications work.
+
+To silence dry-run pushes later (live orders always notify), add
+`Environment=NOTIFY_DRY_RUN=false` to the same override file.
+
+## 5. Going LIVE (real money) — only when YOU decide
 
 > ⚠️ **LIVE mode places real orders with real money.** Start small. The Oct 30
 > paper/dry-run review is the decision point — do not flip this before then.
@@ -96,7 +113,7 @@ expire after 120 seconds so nothing rests stale.
 Note: the key pair lives on the instance — if you ever delete and recreate
 it, repeat steps 1–2 (new key pair, new upload).
 
-## 5. Manual install (alternative to cloud-init)
+## 6. Manual install (alternative to cloud-init)
 
 ```bash
 ssh ubuntu@<instance-ip>
@@ -110,7 +127,7 @@ sudo cp ~/kalshi-bot/kalshi-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now kalshi-bot
 ```
 
-## 6. Configuration
+## 7. Configuration
 
 All via environment variables (in the service file or `systemctl edit`):
 
@@ -125,7 +142,7 @@ All via environment variables (in the service file or `systemctl edit`):
 | `KALSHI_KEY_ID` | — | from kalshi.com after uploading public key |
 | `KALSHI_KEY_PATH` | `~/.kalshi/kalshi-private.pem` | private key file (600) |
 
-## 7. How it works
+## 8. How it works
 
 Each scan: settle/mark open positions from Kalshi → evaluate every watchlist
 pair (Kalshi quote vs Polymarket reference, same math as the paper engine) →
@@ -134,7 +151,7 @@ one-position-per-event) → dry-run: append a `"dry-run"` ledger entry;
 live: re-fetch the quote, place a limit order at the ask only if it's still
 within 2¢ of the signal price, record the order id/fill.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 - `journalctl -u kalshi-bot` — everything the bot prints lands here.
 - Service won't start: `systemctl status kalshi-bot`; usual cause is a bad

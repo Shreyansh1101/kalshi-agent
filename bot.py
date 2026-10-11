@@ -36,6 +36,14 @@ MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
 STALE_TOLERANCE_C = 2.0                   # live: skip if price moved >2c
 
+# ---------------- push notifications (ntfy.sh) ----------------
+# Set NTFY_TOPIC on the instance to get a phone push on every signal/order.
+# Topic is a secret — keep it out of the repo (env var, not code).
+# Install the ntfy app and subscribe to the topic to receive pushes.
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+NOTIFY_DRY_RUN = os.environ.get("NOTIFY_DRY_RUN", "true").lower() not in ("0", "false", "no")
+
 WATCHLIST = os.path.join(HERE, "watchlist.json")
 LEDGER = os.path.join(HERE, "ledger.json")
 STATE = os.path.join(HERE, "state.json")
@@ -49,6 +57,22 @@ _client = None
 
 def log(msg):
     print(f"[{eng.now_et().isoformat(timespec='seconds')}] {msg}", flush=True)
+
+
+def notify(title, msg, priority="default"):
+    """Phone push via ntfy.sh. Silent no-op when NTFY_TOPIC is unset."""
+    if not NTFY_TOPIC:
+        return
+    try:
+        import requests
+        requests.post(
+            f"{NTFY_SERVER}/{NTFY_TOPIC}",
+            data=msg.encode("utf-8"),
+            headers={"Title": title, "Priority": priority, "Tags": "robot"},
+            timeout=10,
+        )
+    except Exception as ex:
+        log(f"notify failed: {type(ex).__name__}: {ex}")
 
 
 # ---------------- Kalshi authenticated client (live only) ----------------
@@ -188,6 +212,10 @@ def handle_signal(s):
             "Kalshi signal (paper)", "Kalshi bot signal (DRY-RUN \u2014 no order placed)")
         log(f"DRY-RUN would trade: {s['side']} {s['contracts']}x {s['ticker']} "
             f"@ {s['entry_price_c']:.0f}c (div {s['divergence_c']:+.1f}c)")
+        if NOTIFY_DRY_RUN:
+            notify("Kalshi bot (dry-run)",
+                   f"DRY-RUN signal: {s['side']} {s['contracts']}x {s['ticker']} "
+                   f"@ {s['entry_price_c']:.0f}c (div {s['divergence_c']:+.1f}c)")
         return e
     # ---- LIVE: real money ----
     q = fresh_quote(s["ticker"])
@@ -203,6 +231,9 @@ def handle_signal(s):
         order = place_live_order(get_client(), s, ask_now)
     except Exception as ex:
         log(f"LIVE order FAILED {s['ticker']}: {type(ex).__name__}: {ex}")
+        notify("Kalshi bot: ORDER FAILED",
+               f"{s['side']} {s['contracts']}x {s['ticker']}: {type(ex).__name__}",
+               priority="high")
         return None
     e = dict(s)
     e["mode"] = "live"
@@ -216,6 +247,9 @@ def handle_signal(s):
         e["remaining_count"] = getattr(order, "remaining_count", None)
     log(f"LIVE order placed: {s['side']} {s['contracts']}x {s['ticker']} @ {ask_now:.0f}c "
         f"order_id={e.get('order_id')}")
+    notify("Kalshi bot: LIVE ORDER (real money)",
+           f"Bought {s['side']} {s['contracts']}x {s['ticker']} @ {ask_now:.0f}c",
+           priority="high")
     return e
 
 
@@ -285,6 +319,7 @@ def main():
                         or not os.environ.get("KALSHI_KEY_PATH")):
         raise SystemExit("LIVE mode needs KALSHI_KEY_ID and KALSHI_KEY_PATH. Refusing to start.")
     log("=" * 60)
+    notify("Kalshi bot started", f"MODE: {mode} — notifications working")
     while True:
         try:
             t = eng.now_et()

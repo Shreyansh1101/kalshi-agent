@@ -32,7 +32,7 @@ POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
 MAX_STAKE_C = float(os.environ.get("MAX_STAKE_PER_TRADE", "1000"))      # $10.00
 MAX_SIGNALS_PER_DAY = int(os.environ.get("MAX_SIGNALS_PER_DAY", "0"))   # 0 = no cap
 DAILY_STOP_LOSS_C = float(os.environ.get("DAILY_STOP_LOSS_CENTS", "2000"))  # $20.00
-TAKE_PROFIT_CENTS = float(os.environ.get("TAKE_PROFIT_CENTS", "200"))  # $2.00 net
+TAKE_PROFIT_PCT = float(os.environ.get("TAKE_PROFIT_PCT", "0.30"))  # 30% of stake
 MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
 STALE_TOLERANCE_C = 2.0                   # live: skip if price moved >2c
@@ -193,12 +193,12 @@ def settle_bot(ledger, errors):
 
 def check_take_profit(ledger, errors):
     """Early exit: close any open position whose net-at-bid profit reaches
-    TAKE_PROFIT_CENTS (net of entry fee, exit fee and spread — the bid is
-    what a real sell would actually get). Runs every scan, even when the
-    daily stop has halted new entries: exits only reduce risk. In dry-run
+    TAKE_PROFIT_PCT of its stake (net of entry fee, exit fee and spread — the
+    bid is what a real sell would actually get). Runs every scan, even when
+    the daily stop has halted new entries: exits only reduce risk. In dry-run
     the exit is simulated at the bid; live it places a real sell order.
     Returns the list of exited entries."""
-    if TAKE_PROFIT_CENTS <= 0:
+    if TAKE_PROFIT_PCT <= 0:
         return []
     exited = []
     t = eng.now_et().isoformat()
@@ -218,7 +218,8 @@ def check_take_profit(ledger, errors):
         exit_value_c = round(e["contracts"] * bid, 2)
         exit_fee_c = eng.taker_fee_c(e["contracts"], bid / 100.0)
         net_c = exit_value_c - e.get("stake_c", 0) - e.get("fee_c", 0) - exit_fee_c
-        if net_c < TAKE_PROFIT_CENTS:
+        threshold_c = TAKE_PROFIT_PCT * e.get("stake_c", 0)
+        if net_c < threshold_c:
             continue
         # --- exit it ---
         e["status"] = "exited"
@@ -435,7 +436,7 @@ def main():
     log(f"Kalshi bot starting \u2014 MODE: {mode}")
     cap = "uncapped" if MAX_SIGNALS_PER_DAY == 0 else MAX_SIGNALS_PER_DAY
     log(f"poll={POLL_SECONDS}s stake={MAX_STAKE_C / 100:.2f} max/day={cap} "
-        f"stop={DAILY_STOP_LOSS_C / 100:.2f} take_profit={TAKE_PROFIT_CENTS / 100:.2f} "
+        f"stop={DAILY_STOP_LOSS_C / 100:.2f} take_profit={TAKE_PROFIT_PCT * 100:.0f}% "
         f"min_div={MIN_DIVERGENCE_C:.0f}c window=9-21 ET")
     if not DRY_RUN and (not os.environ.get("KALSHI_KEY_ID")
                         or not os.environ.get("KALSHI_KEY_PATH")):

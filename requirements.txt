@@ -1,0 +1,5 @@
+# Kalshi auto-trading bot dependencies.
+# Pure-Python install surface; cryptography/httpx/pydantic ship wheels for
+# both x86_64 and ARM64 (Oracle E2.1.Micro is x86_64, A1.Flex is ARM64).
+kalshi-python>=2.1.4   # official Kalshi SDK (RSA-PSS request signing)
+requests>=2.31         # general HTTP (kept for future reference-price sources)

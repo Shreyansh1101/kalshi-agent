@@ -1,0 +1,21 @@
+[Unit]
+Description=Kalshi auto-trading bot (DRY-RUN by default)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi-bot
+ExecStart=/home/ubuntu/kalshi-bot/.venv/bin/python /home/ubuntu/kalshi-bot/bot.py
+# DRY_RUN=true is the safe default: the bot only logs what it WOULD trade.
+# To go live (real money), change to false AND set KALSHI_KEY_ID — see README.
+Environment=DRY_RUN=true
+Environment=POLL_SECONDS=60
+Environment=KALSHI_KEY_PATH=/home/ubuntu/.kalshi/kalshi-private.pem
+#Environment=KALSHI_KEY_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

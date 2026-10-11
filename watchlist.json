@@ -1,0 +1,87 @@
+{
+ "dynamic_universes": [
+  {
+   "id": "nfl-games",
+   "kalshi_series": "KXNFLGAME",
+   "match_note": "Exact match by game. Kalshi event ticker encodes date+teams (exact team codes taken from market tickers, e.g. KXNFLGAME-26OCT11PHIJAC-PHI -> PHI). Polymarket event via slug nfl-<c1>-<c2>-<yyyy-mm-dd> (code map: JAC->jax) with fallback to gamma public-search by team full names filtered to same date. Side matched by team full name to Polymarket moneyline outcome title. Reference = CLOB buy price of that outcome's YES token.",
+   "max_events": 6,
+   "polymarket_slug_prefix": "nfl"
+  },
+  {
+   "id": "mlb-games",
+   "kalshi_series": "KXMLBGAME",
+   "match_note": "Same method as NFL; Polymarket MLB slug format unverified, relies on search fallback. Fail soft if unmatchable.",
+   "max_events": 2,
+   "polymarket_slug_prefix": "mlb"
+  }
+ ],
+ "fed_pairs": [
+  {
+   "description": "Fed funds upper bound above 4.00% after Oct 28 2026 meeting",
+   "id": "fed-oct-2026-hike",
+   "kalshi_event": "KXFED-26OCT",
+   "kalshi_ticker": "KXFED-26OCT-T4.00",
+   "match_note": "Derived match: Kalshi threshold ladder vs Polymarket cut-size buckets. Each scan re-derives the current upper bound from the full ladder (first threshold ascending whose mid < 97c; the step below must be ~100c). The pair is only valid if its threshold equals that baseline; then P(upper > T after meeting) == P(hike at that meeting). December Fed omitted: Kalshi Dec thresholds are cumulative across the Oct+Dec meetings while Polymarket Dec buckets describe the December meeting only.",
+   "polymarket_search": "fed decision october",
+   "polymarket_slug_fallback": "fed-decision-in-october-20260617190323537",
+   "polymarket_year": 2026,
+   "reference_rule": "sum of CLOB YES buy prices of buckets whose title contains 'increase' (case-insensitive) = P(Oct meeting hikes)"
+  }
+ ],
+ "generated": "2026-10-09",
+ "notes": "NFL/MLB pairs resolve dynamically each scan because games expire weekly; a static ticker list would go stale in days. Fed pair is static but its rate baseline is re-derived from the full Kalshi ladder on every scan (never hardcoded). CPI skipped: Kalshi headline-CPI thresholds have no clean Polymarket match (Core CPI only).",
+ "slug_code_map": {
+  "JAC": "jax"
+ },
+ "strategy": "Cross-market divergence vs Polymarket reference price. Signal when |Kalshi YES mid - reference YES| >= 4c. Paper only.",
+ "team_names": {
+  "ARI": "Arizona Cardinals",
+  "ATH": "Oakland Athletics",
+  "ATL": "Atlanta Falcons",
+  "BAL": "Baltimore Ravens",
+  "BOS": "Boston Red Sox",
+  "BUF": "Buffalo Bills",
+  "CAR": "Carolina Panthers",
+  "CHC": "Chicago Cubs",
+  "CHI": "Chicago Bears",
+  "CIN": "Cincinnati Bengals",
+  "CLE": "Cleveland Browns",
+  "COL": "Colorado Rockies",
+  "CWS": "Chicago White Sox",
+  "DAL": "Dallas Cowboys",
+  "DEN": "Denver Broncos",
+  "DET": "Detroit Lions",
+  "GB": "Green Bay Packers",
+  "HOU": "Houston Texans",
+  "IND": "Indianapolis Colts",
+  "JAC": "Jacksonville Jaguars",
+  "KC": "Kansas City Chiefs",
+  "LAA": "Los Angeles Angels",
+  "LAC": "Los Angeles Chargers",
+  "LAD": "Los Angeles Dodgers",
+  "LAR": "Los Angeles Rams",
+  "LV": "Las Vegas Raiders",
+  "MIA": "Miami Dolphins",
+  "MIL": "Milwaukee Brewers",
+  "MIN": "Minnesota Vikings",
+  "NE": "New England Patriots",
+  "NO": "New Orleans Saints",
+  "NYG": "New York Giants",
+  "NYJ": "New York Jets",
+  "NYM": "New York Mets",
+  "NYY": "New York Yankees",
+  "OAK": "Oakland Athletics",
+  "PHI": "Philadelphia Eagles",
+  "PIT": "Pittsburgh Steelers",
+  "SD": "San Diego Padres",
+  "SEA": "Seattle Seahawks",
+  "SF": "San Francisco 49ers",
+  "STL": "St. Louis Cardinals",
+  "TB": "Tampa Bay Buccaneers",
+  "TEN": "Tennessee Titans",
+  "TEX": "Texas Rangers",
+  "TOR": "Toronto Blue Jays",
+  "WAS": "Washington Commanders",
+  "WSH": "Washington Nationals"
+ }
+}

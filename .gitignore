@@ -1,0 +1,14 @@
+# Secrets — never commit these.
+*.pem
+*.key
+.kalshi/
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Bot runtime state (per-instance)
+ledger.json
+state.json

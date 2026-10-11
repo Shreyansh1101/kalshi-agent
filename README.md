@@ -1,0 +1,164 @@
+# Kalshi Auto-Trading Bot
+
+Polls the divergence strategy every 60 seconds and trades it automatically.
+Strategy, fee math, and reference prices are shared with the paper-signal
+engine (`signal_engine.py`, vendored from the paper scanner) — only the
+execution layer is new.
+
+> **DRY-RUN BY DEFAULT.** Out of the box the bot only *logs* what it would
+> trade (`status: "dry-run"` in `ledger.json`) and never places a real order.
+> Flipping to live is a deliberate manual step (see §6). Paper-first until
+> the Oct 30 review.
+
+## 0. Cost: $0 on your Oracle Cloud
+
+This is designed for a **second VM.Standard.E2.1.Micro** instance. Oracle's
+Always Free tier includes **2× E2.1.Micro** (1 OCPU / 1 GB RAM each), so with
+one already running, the second one stays free — nothing about your current
+instance's pricing changes.
+
+It also fits the storage allowance: 2 instances × 50 GB default boot volume
+= 100 GB, inside the 200 GB Always Free block-volume allowance.
+
+(We use E2.1.Micro rather than the ARM A1.Flex shape on purpose: A1 capacity
+is frequently unavailable, and its Always Free allowance was halved in June
+2026 to 2 OCPU / 12 GB total. The bot needs almost nothing — 1 GB RAM is
+plenty. The 60-second polling also keeps the instance active, so there is no
+idle-reclaim risk.)
+
+## 1. Put the code in your own GitHub repo
+
+```bash
+cd ~/workspace/kalshi-bot
+git init && git add . && git commit -m "kalshi bot"
+git remote add origin https://github.com/<you>/kalshi-bot.git
+git push -u origin main
+```
+
+There are **no secrets in this repo by design** — the Kalshi private key is
+placed on the instance out-of-band (§4). `.gitignore` excludes `*.pem`,
+`.venv/`, and the runtime `ledger.json`/`state.json`.
+
+## 2. Create the instance (self-installing)
+
+1. In `cloud-init.yaml`, replace the `REPO_URL` placeholder with your repo's
+   HTTPS URL. (If your repo is private, skip cloud-init and use the manual
+   install below, or embed a fine-grained read-only PAT in the URL — never
+   commit the PAT itself.)
+2. Oracle console → Compute → Create instance:
+   - **Shape:** `VM.Standard.E2.1.Micro` (Always Free)
+   - **Image:** Ubuntu 24.04
+   - **Networking:** your VCN, public subnet, *assign a public IPv4 address*,
+     add your SSH public key
+   - **Management → Initialization script:** paste the whole `cloud-init.yaml`
+3. Create, wait ~3–5 minutes for first boot.
+
+## 3. Verify
+
+```bash
+ssh ubuntu@<instance-ip>
+journalctl -u kalshi-bot -f
+```
+
+You should see `MODE: DRY-RUN (no real orders)` and a `scan done:` line every
+60 seconds between 9 AM and 9 PM ET. Outside that window it sleeps.
+
+```bash
+cat ~/kalshi-bot/ledger.json   # dry-run entries accumulate here
+```
+
+## 4. API keys (do this ON the instance, never in the repo)
+
+```bash
+cd ~/kalshi-bot && ./generate_keys.sh
+# → creates ~/.kalshi/kalshi-private.pem (600) and kalshi-public.pem
+```
+
+1. Upload `~/.kalshi/kalshi-public.pem` at **kalshi.com → Settings → API → Add API key**.
+2. Kalshi shows a **Key ID** — copy it.
+3. Tell the service about it (without ever putting the private key in a file
+   that gets committed):
+
+```bash
+sudo systemctl edit kalshi-bot   # add this line in the editor:
+#   Environment=KALSHI_KEY_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+sudo systemctl restart kalshi-bot
+```
+
+`KALSHI_KEY_PATH` is already set in `kalshi-bot.service` to
+`/home/ubuntu/.kalshi/kalshi-private.pem`.
+
+## 5. Manual install (alternative to cloud-init)
+
+```bash
+ssh ubuntu@<instance-ip>
+sudo apt-get update && sudo apt-get install -y python3 python3-venv git
+git clone https://github.com/<you>/kalshi-bot.git ~/kalshi-bot
+python3 -m venv ~/kalshi-bot/.venv
+~/kalshi-bot/.venv/bin/pip install -r ~/kalshi-bot/requirements.txt
+sudo cp ~/kalshi-bot/kalshi-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now kalshi-bot
+```
+
+## 6. Going LIVE (real money) — only when YOU decide
+
+> ⚠️ **LIVE mode places real orders with real money.** Start small. The Oct 30
+> paper/dry-run review is the decision point — do not flip this before then.
+> Never trade money you can't afford to lose. You can flip back to dry-run at
+> any time.
+
+```bash
+sudo systemctl edit kalshi-bot
+# change:  Environment=DRY_RUN=true   →   Environment=DRY_RUN=false
+# (KALSHI_KEY_ID must already be set from §4)
+sudo systemctl daemon-reload
+sudo systemctl restart kalshi-bot
+journalctl -u kalshi-bot -f   # confirm: MODE: *** LIVE — REAL MONEY ***
+```
+
+Safety rails that stay on in live mode: $4 max per trade, max 3 orders/day,
+$20 daily stop-loss (then it stops for the day), one position per event,
+9 AM–9 PM ET window only, and every live order re-checks the quote first —
+if the price moved more than 2¢ from the signal, it skips. Live limit orders
+expire after 120 seconds so nothing rests stale.
+
+To go back to dry-run: set `DRY_RUN=true` again, `daemon-reload`, restart.
+
+## 7. Configuration
+
+All via environment variables (in the service file or `systemctl edit`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DRY_RUN` | `true` | `true` = log only; `false` = real orders |
+| `POLL_SECONDS` | `60` | seconds between scans |
+| `MAX_STAKE_PER_TRADE` | `400` | cents ($4.00) max per order |
+| `MAX_SIGNALS_PER_DAY` | `3` | max orders per day (ET) |
+| `DAILY_STOP_LOSS_CENTS` | `2000` | cents ($20) — halts new orders for the day |
+| `MIN_DIVERGENCE_CENTS` | `2` | min Kalshi-vs-reference gap to trade |
+| `KALSHI_KEY_ID` | — | from kalshi.com after uploading public key |
+| `KALSHI_KEY_PATH` | `~/.kalshi/kalshi-private.pem` | private key file (600) |
+
+## 8. How it works
+
+Each scan: settle/mark open positions from Kalshi → evaluate every watchlist
+pair (Kalshi quote vs Polymarket reference, same math as the paper engine) →
+strongest divergence per event wins → risk checks (daily cap, stop-loss,
+one-position-per-event) → dry-run: append a `"dry-run"` ledger entry;
+live: re-fetch the quote, place a limit order at the ask only if it's still
+within 2¢ of the signal price, record the order id/fill.
+
+## 9. Troubleshooting
+
+- `journalctl -u kalshi-bot` — everything the bot prints lands here.
+- Service won't start: `systemctl status kalshi-bot`; usual cause is a bad
+  path in `kalshi-bot.service` if you cloned somewhere other than
+  `/home/ubuntu/kalshi-bot`.
+- `KALSHI_KEY_ID` / key errors in live mode: re-check §4; the private key
+  file must be readable by the `ubuntu` user (`chmod 600`).
+- Oracle says "out of capacity" for E2.1.Micro: retry in another availability
+  domain of your home region; E2 capacity is usually fine.
+- To update the bot: `cd ~/kalshi-bot && git pull && sudo systemctl restart kalshi-bot`.
+  If the paper strategy changes, re-copy the engine:
+  `cp ~/workspace/kalshi-signals/scanner.py` → `signal_engine.py` (keep the
+  provenance header at the top).

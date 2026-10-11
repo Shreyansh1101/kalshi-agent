@@ -17,8 +17,9 @@
 #   4. Create the instance, wait ~3-5 minutes, then SSH in and verify:
 #        journalctl -u kalshi-bot -f
 #      The bot starts in DRY_RUN mode: it only logs what it WOULD trade.
-#      Place your Kalshi private key on the instance manually afterwards
-#      (README step 4) — it is never in the repo or in this script.
+#      An API key pair is generated automatically at boot below — the private
+#      key never leaves the instance. The Key ID is only needed later, if and
+#      when you flip to LIVE (README "Going LIVE" — one command).
 #
 #   ===> EDIT THIS: your repo URL <===
 #   vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
@@ -31,7 +32,11 @@ runcmd:
   - sudo -u ubuntu git clone https://github.com/Shreyansh1101/kalshi-agent.git /home/ubuntu/kalshi-bot
   - sudo -u ubuntu python3 -m venv /home/ubuntu/kalshi-bot/.venv
   - sudo -u ubuntu /home/ubuntu/kalshi-bot/.venv/bin/pip install -q -r /home/ubuntu/kalshi-bot/requirements.txt
-  - chmod +x /home/ubuntu/kalshi-bot/generate_keys.sh
+  - chmod +x /home/ubuntu/kalshi-bot/generate_keys.sh /home/ubuntu/kalshi-bot/go-live.sh /home/ubuntu/kalshi-bot/go-dry-run.sh
+  # -- API key pair, generated ON the instance (private key never leaves it) --
+  - sudo -u ubuntu /home/ubuntu/kalshi-bot/generate_keys.sh /home/ubuntu/.kalshi
+  - echo "=== Kalshi public key: upload at kalshi.com -> Settings -> API when going LIVE ==="
+  - cat /home/ubuntu/.kalshi/kalshi-public.pem
   # -- install + start the systemd service (DRY_RUN=true by default) --
   - cp /home/ubuntu/kalshi-bot/kalshi-bot.service /etc/systemd/system/kalshi-bot.service
   - systemctl daemon-reload

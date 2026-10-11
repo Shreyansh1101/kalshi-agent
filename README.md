@@ -34,21 +34,21 @@ There are **no secrets in this repo by design** — the Kalshi private key is
 placed on the instance out-of-band (§4). `.gitignore` excludes `*.pem`,
 `.venv/`, and the runtime `ledger.json`/`state.json`.
 
-## 2. Create the instance (self-installing)
+## 2. Create the instance (self-installing) — the whole deploy
 
-1. `cloud-init.yaml` already points at your repo
-   (`https://github.com/Shreyansh1101/kalshi-agent.git`). (If your repo is
-   private, skip cloud-init and use the manual install below, or embed a
-   fine-grained read-only PAT in the URL — never commit the PAT itself.)
-2. Oracle console → Compute → Create instance:
+1. Oracle console → Compute → Create instance:
    - **Shape:** `VM.Standard.E2.1.Micro` (Always Free)
    - **Image:** Ubuntu 24.04
    - **Networking:** your VCN, public subnet, *assign a public IPv4 address*,
      add your SSH public key
    - **Management → Initialization script:** paste the whole `cloud-init.yaml`
-3. Create, wait ~3–5 minutes for first boot.
+2. Create, wait ~3–5 minutes for first boot.
 
-## 3. Verify
+That's the entire deploy. The bot starts in **DRY-RUN** (logs what it would
+trade, places no orders — dry-run needs no API keys), and an API key pair is
+generated automatically at boot (private key never leaves the instance).
+
+## 3. Verify (optional)
 
 ```bash
 ssh ubuntu@<instance-ip>
@@ -62,26 +62,39 @@ You should see `MODE: DRY-RUN (no real orders)` and a `scan done:` line every
 cat ~/kalshi-bot/ledger.json   # dry-run entries accumulate here
 ```
 
-## 4. API keys (do this ON the instance, never in the repo)
+## 4. Going LIVE (real money) — only when YOU decide
+
+> ⚠️ **LIVE mode places real orders with real money.** Start small. The Oct 30
+> paper/dry-run review is the decision point — do not flip this before then.
+> Never trade money you can't afford to lose. You can flip back to dry-run at
+> any time.
+
+Three steps, all on the instance:
 
 ```bash
-cd ~/kalshi-bot && ./generate_keys.sh
-# → creates ~/.kalshi/kalshi-private.pem (600) and kalshi-public.pem
+# 1. Print the public key (generated automatically at boot):
+cat /home/ubuntu/.kalshi/kalshi-public.pem
 ```
 
-1. Upload `~/.kalshi/kalshi-public.pem` at **kalshi.com → Settings → API → Add API key**.
-2. Kalshi shows a **Key ID** — copy it.
-3. Tell the service about it (without ever putting the private key in a file
-   that gets committed):
+2. Upload that public key at **kalshi.com → Settings → API → Add API key**.
+   Kalshi shows a **Key ID** — copy it.
 
 ```bash
-sudo systemctl edit kalshi-bot   # add this line in the editor:
-#   Environment=KALSHI_KEY_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-sudo systemctl restart kalshi-bot
+# 3. One command flips the bot live:
+sudo ~/kalshi-bot/go-live.sh <paste-the-Key-ID>
+# confirm: MODE: *** LIVE — REAL MONEY ***
 ```
 
-`KALSHI_KEY_PATH` is already set in `kalshi-bot.service` to
-`/home/ubuntu/.kalshi/kalshi-private.pem`.
+Back to dry-run any time: `sudo ~/kalshi-bot/go-dry-run.sh`
+
+Safety rails that stay on in live mode: $4 max per trade, max 3 orders/day,
+$20 daily stop-loss (then it stops for the day), one position per event,
+9 AM–9 PM ET window only, and every live order re-checks the quote first —
+if the price moved more than 2¢ from the signal, it skips. Live limit orders
+expire after 120 seconds so nothing rests stale.
+
+Note: the key pair lives on the instance — if you ever delete and recreate
+it, repeat steps 1–2 (new key pair, new upload).
 
 ## 5. Manual install (alternative to cloud-init)
 
@@ -91,35 +104,13 @@ sudo apt-get update && sudo apt-get install -y python3 python3-venv git
 git clone https://github.com/Shreyansh1101/kalshi-agent.git ~/kalshi-bot
 python3 -m venv ~/kalshi-bot/.venv
 ~/kalshi-bot/.venv/bin/pip install -r ~/kalshi-bot/requirements.txt
+chmod +x ~/kalshi-bot/generate_keys.sh ~/kalshi-bot/go-live.sh ~/kalshi-bot/go-dry-run.sh
+~/kalshi-bot/generate_keys.sh   # creates the API key pair on the instance
 sudo cp ~/kalshi-bot/kalshi-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now kalshi-bot
 ```
 
-## 6. Going LIVE (real money) — only when YOU decide
-
-> ⚠️ **LIVE mode places real orders with real money.** Start small. The Oct 30
-> paper/dry-run review is the decision point — do not flip this before then.
-> Never trade money you can't afford to lose. You can flip back to dry-run at
-> any time.
-
-```bash
-sudo systemctl edit kalshi-bot
-# change:  Environment=DRY_RUN=true   →   Environment=DRY_RUN=false
-# (KALSHI_KEY_ID must already be set from §4)
-sudo systemctl daemon-reload
-sudo systemctl restart kalshi-bot
-journalctl -u kalshi-bot -f   # confirm: MODE: *** LIVE — REAL MONEY ***
-```
-
-Safety rails that stay on in live mode: $4 max per trade, max 3 orders/day,
-$20 daily stop-loss (then it stops for the day), one position per event,
-9 AM–9 PM ET window only, and every live order re-checks the quote first —
-if the price moved more than 2¢ from the signal, it skips. Live limit orders
-expire after 120 seconds so nothing rests stale.
-
-To go back to dry-run: set `DRY_RUN=true` again, `daemon-reload`, restart.
-
-## 7. Configuration
+## 6. Configuration
 
 All via environment variables (in the service file or `systemctl edit`):
 
@@ -134,7 +125,7 @@ All via environment variables (in the service file or `systemctl edit`):
 | `KALSHI_KEY_ID` | — | from kalshi.com after uploading public key |
 | `KALSHI_KEY_PATH` | `~/.kalshi/kalshi-private.pem` | private key file (600) |
 
-## 8. How it works
+## 7. How it works
 
 Each scan: settle/mark open positions from Kalshi → evaluate every watchlist
 pair (Kalshi quote vs Polymarket reference, same math as the paper engine) →
@@ -143,7 +134,7 @@ one-position-per-event) → dry-run: append a `"dry-run"` ledger entry;
 live: re-fetch the quote, place a limit order at the ask only if it's still
 within 2¢ of the signal price, record the order id/fill.
 
-## 9. Troubleshooting
+## 8. Troubleshooting
 
 - `journalctl -u kalshi-bot` — everything the bot prints lands here.
 - Service won't start: `systemctl status kalshi-bot`; usual cause is a bad

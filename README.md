@@ -26,14 +26,9 @@ is frequently unavailable, and its Always Free allowance was halved in June
 plenty. The 60-second polling also keeps the instance active, so there is no
 idle-reclaim risk.)
 
-## 1. Put the code in your own GitHub repo
+## 1. Code location
 
-```bash
-cd ~/workspace/kalshi-bot
-git init && git add . && git commit -m "kalshi bot"
-git remote add origin https://github.com/<you>/kalshi-bot.git
-git push -u origin main
-```
+The code is already pushed to your repo: `https://github.com/Shreyansh1101/kalshi-agent`.
 
 There are **no secrets in this repo by design** — the Kalshi private key is
 placed on the instance out-of-band (§4). `.gitignore` excludes `*.pem`,
@@ -41,10 +36,10 @@ placed on the instance out-of-band (§4). `.gitignore` excludes `*.pem`,
 
 ## 2. Create the instance (self-installing)
 
-1. In `cloud-init.yaml`, replace the `REPO_URL` placeholder with your repo's
-   HTTPS URL. (If your repo is private, skip cloud-init and use the manual
-   install below, or embed a fine-grained read-only PAT in the URL — never
-   commit the PAT itself.)
+1. `cloud-init.yaml` already points at your repo
+   (`https://github.com/Shreyansh1101/kalshi-agent.git`). (If your repo is
+   private, skip cloud-init and use the manual install below, or embed a
+   fine-grained read-only PAT in the URL — never commit the PAT itself.)
 2. Oracle console → Compute → Create instance:
    - **Shape:** `VM.Standard.E2.1.Micro` (Always Free)
    - **Image:** Ubuntu 24.04
@@ -93,7 +88,7 @@ sudo systemctl restart kalshi-bot
 ```bash
 ssh ubuntu@<instance-ip>
 sudo apt-get update && sudo apt-get install -y python3 python3-venv git
-git clone https://github.com/<you>/kalshi-bot.git ~/kalshi-bot
+git clone https://github.com/Shreyansh1101/kalshi-agent.git ~/kalshi-bot
 python3 -m venv ~/kalshi-bot/.venv
 ~/kalshi-bot/.venv/bin/pip install -r ~/kalshi-bot/requirements.txt
 sudo cp ~/kalshi-bot/kalshi-bot.service /etc/systemd/system/
@@ -159,6 +154,6 @@ within 2¢ of the signal price, record the order id/fill.
 - Oracle says "out of capacity" for E2.1.Micro: retry in another availability
   domain of your home region; E2 capacity is usually fine.
 - To update the bot: `cd ~/kalshi-bot && git pull && sudo systemctl restart kalshi-bot`.
-  If the paper strategy changes, re-copy the engine:
-  `cp ~/workspace/kalshi-signals/scanner.py` → `signal_engine.py` (keep the
-  provenance header at the top).
+  If the paper strategy changes, update `signal_engine.py` in the repo
+  (it is a vendored copy of the paper scanner — keep the provenance header
+  at the top), commit, push, then `git pull` on the instance.

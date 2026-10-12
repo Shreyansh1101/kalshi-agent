@@ -62,22 +62,30 @@ You should see `MODE: DRY-RUN (no real orders)` and a `scan done:` line every
 cat ~/kalshi-bot/ledger.json   # dry-run entries accumulate here
 ```
 
-## 4. Phone notifications (ntfy.sh)
+## 4. Phone notifications (Telegram — recommended)
 
 The bot pushes to your phone on every signal (dry-run) and on every live
-order or order failure. One-time setup:
+order or order failure. Telegram is the reliable path on iOS (ntfy.sh push
+proved unreliable). One-time setup:
 
-1. Install the **ntfy** app (iOS App Store) and subscribe to this topic:
-   `kalshi-bot-07edfd35`
-2. On the instance, one command:
+1. In Telegram, message **@BotFather** → `/newbot` → copy the token.
+2. Open a chat with your new bot and send it any message.
+3. Get your chat id: open `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   and copy `"chat":{"id": ...}`.
+4. On the instance:
    ```bash
-   sudo mkdir -p /etc/systemd/system/kalshi-bot.service.d && printf '[Service]\nEnvironment=NTFY_TOPIC=kalshi-bot-07edfd35\n' | sudo tee /etc/systemd/system/kalshi-bot.service.d/notify.conf && sudo systemctl daemon-reload && sudo systemctl restart kalshi-bot
+   printf 'TELEGRAM_BOT_TOKEN=<token>\nTELEGRAM_CHAT_ID=<chat id>\n' > ~/.kalshi/notify.env
+   chmod 600 ~/.kalshi/notify.env
+   sudo systemctl restart kalshi-bot
    ```
-3. You'll get a "Kalshi bot started" push within seconds — that confirms
-   notifications work.
+5. You'll get a "Kalshi bot started" message in Telegram within seconds —
+   that confirms notifications work.
 
 To silence dry-run pushes later (live orders always notify), add
-`Environment=NOTIFY_DRY_RUN=false` to the same override file.
+`Environment=NOTIFY_DRY_RUN=false` to a systemd override file.
+
+(Old ntfy.sh path: set `NTFY_TOPIC` — kept as a fallback, but not
+recommended on iOS.)
 
 ## 5. Going LIVE (real money) — only when YOU decide
 

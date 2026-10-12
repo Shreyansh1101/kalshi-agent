@@ -43,12 +43,40 @@ MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
 STALE_TOLERANCE_C = 2.0                   # live: skip if price moved >2c
 
-# ---------------- push notifications (ntfy.sh) ----------------
-# Set NTFY_TOPIC on the instance to get a phone push on every signal/order.
+# ---------------- push notifications (ntfy.sh + Telegram) ----------------
+# ntfy: set NTFY_TOPIC on the instance to get a phone push on every signal/order.
 # Topic is a secret — keep it out of the repo (env var, not code).
 # Install the ntfy app and subscribe to the topic to receive pushes.
+#
+# Telegram (recommended for iOS — far more reliable than ntfy push):
+#   1. In Telegram, message @BotFather -> /newbot -> copy the token.
+#   2. Open a chat with your new bot and send it any message ("hi").
+#   3. Visit https://api.telegram.org/bot<TOKEN>/getUpdates and copy your
+#      chat id from "chat":{"id": ...}.
+#   4. On the instance, write ~/.kalshi/notify.env with:
+#        TELEGRAM_BOT_TOKEN=<token from BotFather>
+#        TELEGRAM_CHAT_ID=<your chat id>
+#      then: chmod 600 ~/.kalshi/notify.env && sudo systemctl restart kalshi-bot
+# Either channel is a silent no-op when unset; both can run at once.
+def _load_file_env(path):
+    """Load KEY=VALUE lines into os.environ without overriding. Missing file OK."""
+    try:
+        with open(os.path.expanduser(path)) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+    except OSError:
+        pass
+
+
+_load_file_env("~/.kalshi/notify.env")
+
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 NOTIFY_DRY_RUN = os.environ.get("NOTIFY_DRY_RUN", "true").lower() not in ("0", "false", "no")
 
 WATCHLIST = os.path.join(HERE, "watchlist.json")
@@ -66,20 +94,37 @@ def log(msg):
     print(f"[{eng.now_et().isoformat(timespec='seconds')}] {msg}", flush=True)
 
 
-def notify(title, msg, priority="default"):
-    """Phone push via ntfy.sh. Silent no-op when NTFY_TOPIC is unset."""
-    if not NTFY_TOPIC:
+def telegram_notify(text):
+    """Phone push via Telegram Bot API. Silent no-op when token/chat id unset."""
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
     try:
         import requests
         requests.post(
-            f"{NTFY_SERVER}/{NTFY_TOPIC}",
-            data=msg.encode("utf-8"),
-            headers={"Title": title, "Priority": priority, "Tags": "robot"},
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
             timeout=10,
         )
     except Exception as ex:
-        log(f"notify failed: {type(ex).__name__}: {ex}")
+        log(f"telegram notify failed: {type(ex).__name__}: {ex}")
+
+
+def notify(title, msg, priority="default"):
+    """Phone push via ntfy.sh and/or Telegram. Each channel is a silent
+    no-op when unset, so either (or both) can be configured."""
+    if NTFY_TOPIC:
+        try:
+            import requests
+            requests.post(
+                f"{NTFY_SERVER}/{NTFY_TOPIC}",
+                data=msg.encode("utf-8"),
+                headers={"Title": title, "Priority": priority, "Tags": "robot"},
+                timeout=10,
+            )
+        except Exception as ex:
+            log(f"notify failed: {type(ex).__name__}: {ex}")
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        telegram_notify(f"{title}\n{msg}" if title else msg)
 
 
 # ---------------- Kalshi authenticated client (live only) ----------------

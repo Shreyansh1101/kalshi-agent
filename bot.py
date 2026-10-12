@@ -34,6 +34,11 @@ MAX_SIGNALS_PER_DAY = int(os.environ.get("MAX_SIGNALS_PER_DAY", "0"))   # 0 = no
 DAILY_STOP_LOSS_C = float(os.environ.get("DAILY_STOP_LOSS_CENTS", "2000"))  # $20.00
 TAKE_PROFIT_PCT = float(os.environ.get("TAKE_PROFIT_PCT", "0.30"))  # 30% of stake
 STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", "0.30"))      # 30% of stake
+# Exit veto: the reference market must confirm at least this fraction of the
+# breached threshold, or the exit is skipped for this scan. Guards against
+# trading on stale/bad Kalshi quotes (e.g. post-game prints that haven't
+# caught up with the final whistle).
+VETO_FRACTION = 0.5
 MIN_DIVERGENCE_C = float(os.environ.get("MIN_DIVERGENCE_CENTS", "2"))
 SCAN_START_H, SCAN_END_H = 9, 21          # ET trading window, same as paper
 STALE_TOLERANCE_C = 2.0                   # live: skip if price moved >2c
@@ -192,14 +197,20 @@ def settle_bot(ledger, errors):
     return settled
 
 
-def check_exits(ledger, errors):
+def check_exits(ledger, errors, ref_map=None):
     """Early exits: close any open position whose net-at-bid P&L reaches
     +TAKE_PROFIT_PCT of its stake (take-profit) or -STOP_LOSS_PCT (stop-loss).
     Net means after entry fee, exit fee and spread — the bid is what a real
     sell would actually get. Runs every scan, even when the daily stop has
     halted new entries: exits only reduce risk. In dry-run the exit is
-    simulated at the bid; live it places a real sell order. Returns the
-    list of exited entries."""
+    simulated at the bid; live it places a real sell order.
+
+    Reference veto: the Polymarket reference must confirm at least
+    VETO_FRACTION of the breached threshold, or the exit is skipped for this
+    scan. This stops the bot trading on stale/bad Kalshi quotes — e.g. a
+    post-game print still showing the pre-final-whistle state. Missing
+    reference fails open (exit allowed, previous behavior).
+    Returns the list of exited entries."""
     if TAKE_PROFIT_PCT <= 0 and STOP_LOSS_PCT <= 0:
         return []
     exited = []
@@ -228,6 +239,21 @@ def check_exits(ledger, errors):
             reason = "stop-loss"
         if not reason:
             continue
+        # Reference veto: skip the exit this scan if the reference market
+        # doesn't confirm the move (stale/bad Kalshi quote).
+        ref_yes_c = (ref_map or {}).get(e["ticker"])
+        if ref_yes_c is not None:
+            ref_value_c = round(e["contracts"] * (ref_yes_c if e["side"] == "YES"
+                                                  else 100.0 - ref_yes_c), 2)
+            ref_net_c = ref_value_c - stake_c - e.get("fee_c", 0) - exit_fee_c
+            pct = TAKE_PROFIT_PCT if reason == "take-profit" else STOP_LOSS_PCT
+            need_c = VETO_FRACTION * pct * stake_c
+            confirmed = ref_net_c >= need_c if reason == "take-profit" else ref_net_c <= -need_c
+            if not confirmed:
+                log(f"exit VETOED ({reason}): {e['ticker']} kalshi net "
+                    f"{eng.fmt_money(net_c)} but reference implies "
+                    f"{eng.fmt_money(ref_net_c)} — skipping this scan")
+                continue
         # --- exit it ---
         e["status"] = "exited"
         e["exited_at_et"] = t
@@ -364,12 +390,16 @@ def scan_once():
 
     errors = []
     settled = settle_bot(ledger, errors)
-    # Exits run before the halt math so freed risk counts this scan.
-    exited = check_exits(ledger, errors)
     pairs = evaluate_pairs(errors)
     if pairs is None:
         log("ERROR: watchlist.json missing/unreadable")
         return
+    # Reference prices for the exit veto: never exit on a Kalshi quote the
+    # reference market contradicts (stale post-game prints).
+    ref_map = {p["kalshi_ticker"]: p["ref_yes_c"] for p in pairs
+               if p.get("ref_yes_c") is not None}
+    # Exits run before the halt math so freed risk counts this scan.
+    exited = check_exits(ledger, errors, ref_map)
 
     pnl = bot_daily_pnl(ledger, today)
     # Exposure-aware stop: halt when worst case (everything open goes to zero)

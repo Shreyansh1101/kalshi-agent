@@ -180,12 +180,15 @@ def settle_bot(ledger, errors):
             mid = q["yes_mid"] if e["side"] == "YES" else q["no_mid"]
             e["last_mark_c"] = round(e["contracts"] * mid, 2)
             e["last_mark_time"] = t
-        if m.get("status") == "settled":
-            ev = str(m.get("expiration_value", "") or m.get("result", "")).lower()
+        if m.get("status") in ("settled", "finalized"):
+            # Kalshi marks finished sports markets "finalized"; the result
+            # field ("yes"/"no") is authoritative — expiration_value can be a
+            # team name (e.g. "Jacksonville") which carries no side info.
+            ev = str(m.get("result", "") or m.get("expiration_value", "")).lower()
             win = ((e["side"] == "YES" and ev in ("yes", "1", "true")) or
                    (e["side"] == "NO" and ev in ("no", "0", "false")))
             if ev not in ("yes", "no", "1", "0", "true", "false", ""):
-                errors.append(f"{e['ticker']}: unclear expiration_value {ev!r} - left open")
+                errors.append(f"{e['ticker']}: unclear result {ev!r} - left open")
                 continue
             payout_c = e["contracts"] * 100 if win else 0
             e["status"] = "settled"
@@ -222,8 +225,10 @@ def check_exits(ledger, errors, ref_map=None):
         if not m:
             errors.append(f"{e['ticker']}: market fetch failed during exit check")
             continue
-        if m.get("status") == "settled":
-            continue  # settle_bot handles these
+        if m.get("status") != "open":
+            # Only ever trade on live quotes. Finished ("settled"/"finalized")
+            # markets have dead quotes — settle_bot handles them.
+            continue
         q = eng.kalshi_quote(m)
         if not q:
             continue
